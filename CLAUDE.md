@@ -1,0 +1,4 @@
+- always start by read the readme.md in the root folder.
+- always start by read the implementation status & guideline documents in ./docs
+- keep solutions as simple as possible,
+- avoid mockup data and behaviours.

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create:*)",
+      "Bash(npm install)",
+      "Bash(nul)",
+      "Bash(exit 0)",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(timeout 10 npm run dev:*)",
+      "Bash(timeout 15 node:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill /F /PID 6132)",
+      "Bash(taskkill //F //PID 6132)",
+      "WebSearch",
+      "Bash(npm uninstall:*)",
+      "Bash(taskkill:*)",
+      "Bash(node:*)",
+      "Bash(timeout 120 curl:*)",
+      "Bash(dir:*)",
+      "Bash(tasklist:*)",
+      "Bash(npm run dev:*)",
+      "Bash(git init:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(del nul)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

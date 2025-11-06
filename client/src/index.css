@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer components {
+  .newspaper-card {
+    @apply bg-white rounded-lg shadow-lg p-6 border-t-4;
+  }
+
+  .progressive-newspaper {
+    @apply border-progressive;
+  }
+
+  .conservative-newspaper {
+    @apply border-conservative;
+  }
+
+  .tech-newspaper {
+    @apply border-tech;
+  }
+}

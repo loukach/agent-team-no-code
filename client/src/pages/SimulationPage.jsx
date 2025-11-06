@@ -1,0 +1,385 @@
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import TopicSelector from '../components/TopicSelector';
+import AgentDebate from '../components/AgentDebate';
+import AgentOrchestrationCanvas from '../components/AgentOrchestrationCanvas';
+import AgentStatusBar from '../components/AgentStatusBar';
+import NewspaperCard from '../components/NewspaperCard';
+import ShareButton from '../components/ShareButton';
+import { runSimulation } from '../utils/api';
+import { socket, connectSocket, disconnectSocket } from '../utils/socket';
+import { useMessageQueue } from '../hooks/useMessageQueue';
+
+export default function SimulationPage() {
+  const navigate = useNavigate();
+  const [running, setRunning] = useState(false);
+  const [topic, setTopic] = useState('');
+  const { messages, enqueueMessage, clearMessages } = useMessageQueue();
+  const [result, setResult] = useState(null);
+  const [simulationId, setSimulationId] = useState(null);
+  const [error, setError] = useState(null);
+  const [phase, setPhase] = useState(null);
+  const [viewMode, setViewMode] = useState('visual'); // 'visual' or 'text'
+  const [agentStates, setAgentStates] = useState({
+    progressive: { status: 'idle', action: '' },
+    conservative: { status: 'idle', action: '' },
+    tech: { status: 'idle', action: '' }
+  });
+  const messagesEndRef = useRef(null);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    connectSocket();
+
+    socket.on('simulation:start', (data) => {
+      enqueueMessage({
+        agent: 'system',
+        newspaper: 'System',
+        message: `Starting simulation for: ${data.topic}`,
+        timestamp: Date.now()
+      });
+      // Reset agent states
+      setAgentStates({
+        progressive: { status: 'active', action: 'Initializing...' },
+        conservative: { status: 'active', action: 'Initializing...' },
+        tech: { status: 'active', action: 'Initializing...' }
+      });
+    });
+
+    socket.on('agent:thinking', (data) => {
+      enqueueMessage(data);
+      updateAgentState(data.agent, 'active', data.message);
+    });
+
+    socket.on('phase:change', (data) => {
+      setPhase(data);
+      enqueueMessage({
+        agent: 'system',
+        newspaper: 'System',
+        message: `📍 ${data.title}`,
+        description: data.description,
+        isPhaseChange: true,
+        timestamp: Date.now()
+      });
+    });
+
+    socket.on('phase:skip', (data) => {
+      enqueueMessage({
+        agent: 'system',
+        newspaper: 'System',
+        message: `⏭️ Skipping Phase ${data.phase}`,
+        description: data.reason,
+        isPhaseChange: true,
+        timestamp: Date.now()
+      });
+    });
+
+    socket.on('agent:reading', (data) => {
+      enqueueMessage({
+        agent: data.agent,
+        newspaper: data.newspaper,
+        message: `👁️ ${data.message}`,
+        action: 'reading',
+        timestamp: Date.now()
+      });
+      updateAgentState(data.agent, 'reading', data.message);
+    });
+
+    socket.on('agent:debating', (data) => {
+      enqueueMessage({
+        agent: data.agent,
+        newspaper: data.newspaper,
+        message: `💬 ${data.message}`,
+        action: 'debating',
+        timestamp: Date.now()
+      });
+      updateAgentState(data.agent, 'debating', data.message);
+    });
+
+    socket.on('agent:debate-complete', (data) => {
+      enqueueMessage({
+        agent: data.agent,
+        newspaper: data.newspaper,
+        message: `✅ ${data.newspaper} responds to ${data.target}`,
+        rebuttal: data.rebuttal,
+        action: 'debate-complete',
+        timestamp: Date.now()
+      });
+      updateAgentState(data.agent, 'complete', 'Response complete');
+    });
+
+    socket.on('agent:progress', (data) => {
+      // Add detailed progress updates with icons
+      const actionIcon = {
+        tool_use: '🔍',
+        tool_result: '📥',
+        writing: '✍️',
+        finalizing: '✅'
+      }[data.action] || '⚙️';
+
+      enqueueMessage({
+        agent: data.agent,
+        newspaper: data.newspaper,
+        message: `${actionIcon} ${data.message}`,
+        action: data.action,
+        tool: data.tool,
+        details: data.details,
+        preview: data.preview,
+        timestamp: Date.now()
+      });
+
+      // Update agent state based on action
+      updateAgentState(data.agent, data.action, data.message);
+    });
+
+    socket.on('agent:complete', (data) => {
+      enqueueMessage({
+        agent: data.agent,
+        newspaper: `${data.agent.charAt(0).toUpperCase() + data.agent.slice(1)} Complete`,
+        message: `Headline ready: "${data.headline}"`,
+        timestamp: Date.now()
+      });
+      updateAgentState(data.agent, 'complete', 'Article complete');
+    });
+
+    socket.on('simulation:complete', (data) => {
+      setResult(data);
+      setRunning(false);
+      // Mark all agents as complete
+      setAgentStates({
+        progressive: { status: 'complete', action: '' },
+        conservative: { status: 'complete', action: '' },
+        tech: { status: 'complete', action: '' }
+      });
+    });
+
+    socket.on('simulation:error', (data) => {
+      setError(data.error);
+      setRunning(false);
+    });
+
+    return () => {
+      socket.off('simulation:start');
+      socket.off('phase:change');
+      socket.off('phase:skip');
+      socket.off('agent:thinking');
+      socket.off('agent:reading');
+      socket.off('agent:debating');
+      socket.off('agent:debate-complete');
+      socket.off('agent:progress');
+      socket.off('agent:complete');
+      socket.off('simulation:complete');
+      socket.off('simulation:error');
+      disconnectSocket();
+    };
+  }, [enqueueMessage]);
+
+  const updateAgentState = (agent, status, action) => {
+    if (!['progressive', 'conservative', 'tech'].includes(agent)) return;
+
+    setAgentStates(prev => ({
+      ...prev,
+      [agent]: { status, action }
+    }));
+  };
+
+  const handleSubmit = async (selectedTopic) => {
+    setTopic(selectedTopic);
+    setRunning(true);
+    clearMessages();
+    setResult(null);
+    setError(null);
+    setPhase(null);
+    setAgentStates({
+      progressive: { status: 'idle', action: '' },
+      conservative: { status: 'idle', action: '' },
+      tech: { status: 'idle', action: '' }
+    });
+
+    try {
+      const fingerprint = `${navigator.userAgent}-${Date.now()}`;
+      const response = await runSimulation(selectedTopic, fingerprint);
+      setSimulationId(response.id);
+    } catch (err) {
+      setError(err.message);
+      setRunning(false);
+    }
+  };
+
+  const handleReset = () => {
+    setRunning(false);
+    setTopic('');
+    clearMessages();
+    setResult(null);
+    setSimulationId(null);
+    setError(null);
+    setPhase(null);
+    setAgentStates({
+      progressive: { status: 'idle', action: '' },
+      conservative: { status: 'idle', action: '' },
+      tech: { status: 'idle', action: '' }
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="container mx-auto px-4">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold mb-2">AI Newsroom Simulator</h1>
+          <button
+            onClick={() => navigate('/')}
+            className="text-blue-600 hover:text-blue-800"
+          >
+            ← Back to Home
+          </button>
+        </div>
+
+        {/* Topic Selector */}
+        {!running && !result && (
+          <div className="mb-8">
+            <TopicSelector onSubmit={handleSubmit} disabled={running} />
+          </div>
+        )}
+
+        {/* Error Display */}
+        {error && (
+          <div className="max-w-2xl mx-auto mb-8 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-red-700 font-semibold">Error:</p>
+            <p className="text-red-600">{error}</p>
+            <button
+              onClick={handleReset}
+              className="mt-3 text-red-600 hover:text-red-800 font-semibold"
+            >
+              Try Again
+            </button>
+          </div>
+        )}
+
+        {/* Running State */}
+        {running && (
+          <div className="max-w-6xl mx-auto mb-8">
+            <h2 className="text-2xl font-bold mb-4 text-center">
+              Newsrooms are working on: <span className="text-blue-600">{topic}</span>
+            </h2>
+
+            {/* Real-Time Agent Status Bar */}
+            <AgentStatusBar agents={agentStates} phase={phase} />
+
+            {/* View Mode Toggle */}
+            <div className="flex justify-center mb-4">
+              <div className="inline-flex rounded-lg border border-gray-300 bg-white p-1">
+                <button
+                  onClick={() => setViewMode('visual')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                    viewMode === 'visual'
+                      ? 'bg-blue-500 text-white'
+                      : 'text-gray-700 hover:text-gray-900'
+                  }`}
+                >
+                  🎨 Visual Orchestration
+                </button>
+                <button
+                  onClick={() => setViewMode('text')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                    viewMode === 'text'
+                      ? 'bg-blue-500 text-white'
+                      : 'text-gray-700 hover:text-gray-900'
+                  }`}
+                >
+                  📝 Message Log
+                </button>
+              </div>
+            </div>
+
+            {/* Phase Indicator (only for text view) */}
+            {phase && viewMode === 'text' && (
+              <div className="mb-4 p-3 bg-gradient-to-r from-indigo-100 to-purple-100 rounded-lg border-2 border-indigo-300">
+                <div className="flex items-center justify-center gap-3">
+                  <span className="text-lg font-bold text-indigo-900">{phase.title}</span>
+                  <span className="text-sm text-indigo-700">• {phase.description}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Orchestration View */}
+            <div className="relative">
+              {viewMode === 'visual' ? (
+                <AgentOrchestrationCanvas messages={messages} phase={phase} />
+              ) : (
+                <div className="bg-white rounded-lg shadow-lg p-6 max-h-96 overflow-y-auto">
+                  <AgentDebate messages={messages} />
+                  <div ref={messagesEndRef} />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Results Display */}
+        {result && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5 }}
+          >
+            <h2 className="text-3xl font-bold mb-2 text-center">
+              Three Perspectives on: {topic}
+            </h2>
+            <p className="text-center text-gray-600 mb-2">
+              Cost: €{result.cost.toFixed(4)}
+            </p>
+
+            {/* Summary of Results */}
+            {(() => {
+              const successful = [result.progressive, result.conservative, result.tech].filter(n => !n.refused && !n.error).length;
+              const refused = [result.progressive, result.conservative, result.tech].filter(n => n.refused).length;
+              const errors = [result.progressive, result.conservative, result.tech].filter(n => n.error).length;
+
+              return (
+                <div className="text-center mb-8">
+                  <p className="text-sm text-gray-600">
+                    {successful} of 3 newspapers covered this story
+                    {refused > 0 && <span> · {refused} declined due to editorial guidelines</span>}
+                    {errors > 0 && <span> · {errors} encountered errors</span>}
+                  </p>
+                </div>
+              );
+            })()}
+
+            <div className="grid md:grid-cols-3 gap-6 mb-8">
+              <NewspaperCard newspaper={result.progressive} type="progressive" />
+              <NewspaperCard newspaper={result.conservative} type="conservative" />
+              <NewspaperCard newspaper={result.tech} type="tech" />
+            </div>
+
+            <div className="mb-8">
+              <ShareButton
+                simulation={{
+                  topic,
+                  progressive: result.progressive,
+                  conservative: result.conservative,
+                  tech: result.tech,
+                }}
+              />
+            </div>
+
+            <div className="text-center">
+              <button
+                onClick={handleReset}
+                className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300"
+              >
+                Run Another Simulation
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </div>
+    </div>
+  );
+}
