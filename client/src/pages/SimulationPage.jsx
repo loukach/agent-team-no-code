@@ -33,10 +33,15 @@ export default function SimulationPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Connect socket once on mount, register all event listeners
   useEffect(() => {
+    // Connect to WebSocket server
     connectSocket();
 
+    console.log('[SimulationPage] Socket connected, registering event listeners');
+
     socket.on('simulation:start', (data) => {
+      console.log('[Socket Event] simulation:start', data);
       enqueueMessage({
         agent: 'system',
         newspaper: 'System',
@@ -148,6 +153,7 @@ export default function SimulationPage() {
     });
 
     socket.on('simulation:complete', (data) => {
+      console.log('[Socket Event] simulation:complete', data);
       setResult(data);
       setRunning(false);
       // Mark all agents as complete
@@ -159,11 +165,15 @@ export default function SimulationPage() {
     });
 
     socket.on('simulation:error', (data) => {
+      console.log('[Socket Event] simulation:error', data);
       setError(data.error);
       setRunning(false);
     });
 
+    // Cleanup: remove event listeners but DON'T disconnect socket
+    // (socket stays connected for the entire session)
     return () => {
+      console.log('[SimulationPage] Cleaning up event listeners (keeping socket connected)');
       socket.off('simulation:start');
       socket.off('phase:change');
       socket.off('phase:skip');
@@ -175,9 +185,9 @@ export default function SimulationPage() {
       socket.off('agent:complete');
       socket.off('simulation:complete');
       socket.off('simulation:error');
-      disconnectSocket();
+      // DON'T call disconnectSocket() - let socket stay alive
     };
-  }, [enqueueMessage]);
+  }, [enqueueMessage]); // enqueueMessage is now memoized, won't cause re-renders
 
   const updateAgentState = (agent, status, action) => {
     if (!['progressive', 'conservative', 'tech'].includes(agent)) return;

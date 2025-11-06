@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 /**
  * Custom hook for smooth, real-time message display
@@ -10,10 +10,10 @@ export function useMessageQueue(initialMessages = []) {
   const [isProcessing, setIsProcessing] = useState(false);
   const processingRef = useRef(false);
 
-  // Add message to queue
-  const enqueueMessage = (message) => {
+  // Add message to queue - MEMOIZED to prevent useEffect dependency issues
+  const enqueueMessage = useCallback((message) => {
     setMessageQueue(prev => [...prev, { ...message, id: `${Date.now()}-${Math.random()}` }]);
-  };
+  }, []);
 
   // Process queue - display messages one by one
   useEffect(() => {
@@ -49,11 +49,11 @@ export function useMessageQueue(initialMessages = []) {
     processNext();
   }, [messageQueue, messageQueue.length]);
 
-  // Clear all messages
-  const clearMessages = () => {
+  // Clear all messages - MEMOIZED for consistency
+  const clearMessages = useCallback(() => {
     setDisplayedMessages([]);
     setMessageQueue([]);
-  };
+  }, []);
 
   return {
     messages: displayedMessages,
