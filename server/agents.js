@@ -85,6 +85,16 @@ ${otherPerspectives}
 
 Write a SHORT rebuttal (2-3 sentences max) responding to ONE specific point from the other headlines that you strongly disagree with. Be provocative and defend your perspective. Format as JSON: {"rebuttal": "Your 2-3 sentence response here", "targetNewspaper": "name of newspaper you're responding to"}`;
 
+    // Emit debate prompt
+    io.emit('agent:activity', {
+      agent: newspaperType,
+      newspaper: newspaper.name,
+      type: 'prompt',
+      prompt: debatePrompt,
+      message: `Sending debate prompt to ${newspaper.name}`,
+      timestamp: Date.now()
+    });
+
     const result = query({
       prompt: debatePrompt,
       options: {
@@ -94,6 +104,7 @@ Write a SHORT rebuttal (2-3 sentences max) responding to ONE specific point from
         cwd: process.cwd(),
         settingSources: [],
         allowedTools: [], // No tools needed for debate
+        includePartialMessages: true, // Enable streaming for debate too
       }
     });
 
@@ -104,8 +115,19 @@ Write a SHORT rebuttal (2-3 sentences max) responding to ONE specific point from
       if (msg.type === 'result') {
         finalResult = msg.result || msg.content || msg.text || JSON.stringify(msg);
         totalCost = msg.total_cost_usd || 0;
-      } else if (msg.type === 'assistant' && msg.content) {
-        for (const block of msg.content) {
+
+        // Emit debate response activity
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'response',
+          response: finalResult,
+          cost: totalCost,
+          message: `Debate response completed`,
+          timestamp: Date.now()
+        });
+      } else if (msg.type === 'assistant' && msg.message?.content) {
+        for (const block of msg.message.content) {
           if (block.type === 'text') {
             finalResult = block.text;
             // Emit debate writing progress
@@ -113,6 +135,16 @@ Write a SHORT rebuttal (2-3 sentences max) responding to ONE specific point from
               agent: newspaperType,
               newspaper: newspaper.name,
               message: `${newspaper.name} is writing a rebuttal...`
+            });
+
+            // Also emit as activity
+            io.emit('agent:activity', {
+              agent: newspaperType,
+              newspaper: newspaper.name,
+              type: 'thinking',
+              response: block.text,
+              message: `${newspaper.name} formulating rebuttal`,
+              timestamp: Date.now()
             });
           }
         }
@@ -161,6 +193,7 @@ Write a SHORT rebuttal (2-3 sentences max) responding to ONE specific point from
 async function runSingleAgent(newspaperType, topic, io) {
   console.log(`[AGENT ${newspaperType.toUpperCase()}] Starting...`);
   const newspaper = NEWSPAPERS[newspaperType];
+  const startTime = Date.now();
 
   // Emit thinking event
   io.emit('agent:thinking', {
@@ -184,14 +217,25 @@ async function runSingleAgent(newspaperType, topic, io) {
 
   try {
     const systemPrompt = createSystemPrompt(newspaper, topic);
-
-    // Use the Agent SDK with proper configuration for web backend
-    const result = query({
-      prompt: `${systemPrompt}
+    const fullPrompt = `${systemPrompt}
 
 Write a news article about: ${topic}
 
-Remember to format your response as JSON with "headline", "story", and "sources" fields.`,
+Remember to format your response as JSON with "headline", "story", and "sources" fields.`;
+
+    // Emit the prompt being sent
+    io.emit('agent:activity', {
+      agent: newspaperType,
+      newspaper: newspaper.name,
+      type: 'prompt',
+      prompt: fullPrompt,
+      message: `Sending prompt to ${newspaper.name}`,
+      timestamp: Date.now()
+    });
+
+    // Use the Agent SDK with proper configuration for web backend
+    const result = query({
+      prompt: fullPrompt,
       options: {
         model: config.anthropic.model, // Use 'sonnet' from config
         apiKey: config.anthropic.apiKey, // Provide API key directly
@@ -199,22 +243,105 @@ Remember to format your response as JSON with "headline", "story", and "sources"
         cwd: process.cwd(),
         settingSources: [], // Don't load from filesystem
         allowedTools: ['WebSearch'], // Enable web search capability
+        includePartialMessages: true, // ✅ Enable streaming and tool visibility!
       }
     });
 
     let finalResult = null;
     let totalCost = 0;
     let lastEmitTime = Date.now();
+    let turnCount = 0;
+    let tokenUsage = { input: 0, output: 0 };
+    let conversationHistory = []; // Track full conversation
+    let seenUserMessages = new Set(); // Deduplicate user messages
 
     // Collect messages from the agent with real-time progress
     for await (const msg of result) {
-      // Emit detailed progress events
-      if (msg.type === 'assistant' && msg.content) {
+      try {
+        // Log raw message for debugging
+        console.log(`[AGENT ${newspaperType.toUpperCase()}] Message type: ${msg.type}`, JSON.stringify(msg).substring(0, 300));
+
+        // Store in conversation history
+        conversationHistory.push({
+          type: msg.type,
+          timestamp: Date.now(),
+          content: msg
+        });
+
+        // Emit detailed progress events
+        if (msg.type === 'system') {
+          // System initialization message - just log it
+          console.log(`[AGENT ${newspaperType.toUpperCase()}] System initialized with ${msg.tools?.length || 0} tools`);
+          continue;
+        } else if (msg.type === 'stream_event') {
+        // Handle streaming partial messages (real-time tool usage!)
+        const event = msg.event;
+
+        if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          const toolBlock = event.content_block;
+          io.emit('agent:activity', {
+            agent: newspaperType,
+            newspaper: newspaper.name,
+            type: 'tool_use',
+            tool: toolBlock.name,
+            toolId: toolBlock.id,
+            message: `🔧 Starting tool: ${toolBlock.name}`,
+            turnNumber: turnCount || 1,
+            timestamp: Date.now()
+          });
+        }
+
+        if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+          // Tool input being streamed
+          console.log(`[AGENT ${newspaperType.toUpperCase()}] Tool input delta:`, event.delta.partial_json);
+        }
+
+        if (event.type === 'message_start') {
+          console.log(`[AGENT ${newspaperType.toUpperCase()}] Message starting...`);
+        }
+      } else if (msg.type === 'user') {
+        // User message (our prompt/request) - deduplicate using uuid
+        const messageId = msg.uuid || JSON.stringify(msg.message);
+        if (!seenUserMessages.has(messageId)) {
+          seenUserMessages.add(messageId);
+          io.emit('agent:activity', {
+            agent: newspaperType,
+            newspaper: newspaper.name,
+            type: 'input',
+            message: `User input to ${newspaper.name}`,
+            content: msg.message?.content,
+            turnNumber: turnCount + 1, // Next turn will start
+            timestamp: Date.now()
+          });
+        }
+      } else if (msg.type === 'assistant' && msg.message?.content) {
+        turnCount++;
+
+        // Emit turn start
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'turn_start',
+          message: `${newspaper.name} - Turn ${turnCount} starting`,
+          turnNumber: turnCount,
+          timestamp: Date.now()
+        });
+
         // Handle assistant messages - emit progress for each action
-        for (const block of msg.content) {
+        for (const block of msg.message.content) {
           if (block.type === 'text') {
             finalResult = block.text;
-            // Emit thinking/writing progress
+            // Emit thinking/writing progress with full content
+            io.emit('agent:activity', {
+              agent: newspaperType,
+              newspaper: newspaper.name,
+              type: 'thinking',
+              message: `${newspaper.name} is formulating response (Turn ${turnCount})`,
+              response: block.text,
+              turnNumber: turnCount,
+              timestamp: Date.now()
+            });
+
             io.emit('agent:progress', {
               agent: newspaperType,
               newspaper: newspaper.name,
@@ -223,21 +350,77 @@ Remember to format your response as JSON with "headline", "story", and "sources"
               preview: block.text.substring(0, 100)
             });
           } else if (block.type === 'tool_use') {
-            // Emit tool usage (e.g., WebSearch)
+            // Emit detailed tool usage
             const toolName = block.name || 'unknown';
-            const toolInput = block.input ? JSON.stringify(block.input).substring(0, 100) : '';
+            const toolInput = block.input || {};
+
+            // Special handling for WebSearch
+            if (toolName === 'WebSearch') {
+              io.emit('agent:activity', {
+                agent: newspaperType,
+                newspaper: newspaper.name,
+                type: 'web_search',
+                tool: toolName,
+                searchQuery: toolInput.query || '',
+                message: `Searching for: "${toolInput.query}"`,
+                timestamp: Date.now()
+              });
+            }
+
+            io.emit('agent:activity', {
+              agent: newspaperType,
+              newspaper: newspaper.name,
+              type: 'tool_use',
+              tool: toolName,
+              toolInput: toolInput,
+              toolId: block.id,
+              message: `Using tool: ${toolName}`,
+              turnNumber: turnCount,
+              timestamp: Date.now()
+            });
+
             io.emit('agent:progress', {
               agent: newspaperType,
               newspaper: newspaper.name,
               action: 'tool_use',
               tool: toolName,
               message: `${newspaper.name} is using ${toolName}...`,
-              details: toolInput
+              details: JSON.stringify(toolInput).substring(0, 100)
             });
           }
         }
       } else if (msg.type === 'tool_result') {
-        // Emit tool result received
+        // Emit detailed tool result
+        let toolOutput = msg.output || msg.result || msg.content;
+
+        // Parse search results if available
+        let searchResults = null;
+        if (typeof toolOutput === 'string' && toolOutput.includes('url')) {
+          try {
+            const parsed = JSON.parse(toolOutput);
+            if (Array.isArray(parsed)) {
+              searchResults = parsed.map(r => ({
+                title: r.title || r.name || 'Unknown',
+                url: r.url || r.link || ''
+              }));
+            }
+          } catch (e) {
+            // Not JSON or not parseable
+          }
+        }
+
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'tool_result',
+          toolOutput: toolOutput,
+          toolId: msg.tool_use_id,
+          searchResults: searchResults,
+          message: `Received tool results`,
+          turnNumber: turnCount,
+          timestamp: Date.now()
+        });
+
         io.emit('agent:progress', {
           agent: newspaperType,
           newspaper: newspaper.name,
@@ -249,12 +432,77 @@ Remember to format your response as JSON with "headline", "story", and "sources"
         finalResult = msg.result || msg.content || msg.text || JSON.stringify(msg);
         totalCost = msg.total_cost_usd || 0;
 
+        if (msg.usage) {
+          tokenUsage.input = msg.usage.input_tokens || tokenUsage.input;
+          tokenUsage.output = msg.usage.output_tokens || tokenUsage.output;
+        }
+
+        // Check for max turns or errors
+        const hitMaxTurns = msg.subtype === 'error_max_turns';
+        const hasErrors = msg.errors && msg.errors.length > 0;
+
+        // Emit final response with full details
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'response',
+          response: finalResult,
+          cost: totalCost,
+          tokenUsage: tokenUsage,
+          duration: Date.now() - startTime,
+          totalTurns: turnCount,
+          hitMaxTurns: hitMaxTurns,
+          errors: msg.errors,
+          message: hitMaxTurns ? `⚠️ Max turns reached (${turnCount})` : `Completed generation`,
+          timestamp: Date.now()
+        });
+
+        // Emit conversation summary
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'conversation_summary',
+          message: `Conversation completed - ${turnCount} turns, ${conversationHistory.length} messages`,
+          summary: {
+            totalTurns: turnCount,
+            totalMessages: conversationHistory.length,
+            duration: Date.now() - startTime,
+            hitMaxTurns: hitMaxTurns,
+            hasErrors: hasErrors,
+            cost: totalCost,
+            tokenUsage: tokenUsage
+          },
+          timestamp: Date.now()
+        });
+
         // Emit final processing
         io.emit('agent:progress', {
           agent: newspaperType,
           newspaper: newspaper.name,
           action: 'finalizing',
           message: `${newspaper.name} is finalizing the article...`
+        });
+      } else if (msg.type === 'error') {
+        // Emit error details
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'error',
+          error: msg.error || msg.message || 'Unknown error',
+          message: `Error occurred: ${msg.message}`,
+          timestamp: Date.now()
+        });
+      }
+      } catch (msgError) {
+        // Catch any errors in message processing
+        console.error(`[AGENT ${newspaperType.toUpperCase()}] Error processing message:`, msgError);
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'error',
+          error: msgError.message,
+          message: `Error processing message: ${msgError.message}`,
+          timestamp: Date.now()
         });
       }
     }

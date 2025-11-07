@@ -7,6 +7,7 @@ import AgentOrchestrationCanvas from '../components/AgentOrchestrationCanvas';
 import AgentStatusBar from '../components/AgentStatusBar';
 import NewspaperCard from '../components/NewspaperCard';
 import ShareButton from '../components/ShareButton';
+import ActivityLogger from '../components/ActivityLogger';
 import { runSimulation } from '../utils/api';
 import { socket, connectSocket, disconnectSocket } from '../utils/socket';
 import { useMessageQueue } from '../hooks/useMessageQueue';
@@ -20,7 +21,8 @@ export default function SimulationPage() {
   const [simulationId, setSimulationId] = useState(null);
   const [error, setError] = useState(null);
   const [phase, setPhase] = useState(null);
-  const [viewMode, setViewMode] = useState('visual'); // 'visual' or 'text'
+  const [viewMode, setViewMode] = useState('visual'); // 'visual', 'text', or 'detailed'
+  const [activities, setActivities] = useState([]);
   const [agentStates, setAgentStates] = useState({
     progressive: { status: 'idle', action: '' },
     conservative: { status: 'idle', action: '' },
@@ -142,6 +144,12 @@ export default function SimulationPage() {
       updateAgentState(data.agent, data.action, data.message);
     });
 
+    // NEW: Listen for detailed activity events
+    socket.on('agent:activity', (data) => {
+      console.log('[Socket Event] agent:activity', data);
+      setActivities(prev => [...prev, data]);
+    });
+
     socket.on('agent:complete', (data) => {
       enqueueMessage({
         agent: data.agent,
@@ -182,6 +190,7 @@ export default function SimulationPage() {
       socket.off('agent:debating');
       socket.off('agent:debate-complete');
       socket.off('agent:progress');
+      socket.off('agent:activity');
       socket.off('agent:complete');
       socket.off('simulation:complete');
       socket.off('simulation:error');
@@ -202,6 +211,7 @@ export default function SimulationPage() {
     setTopic(selectedTopic);
     setRunning(true);
     clearMessages();
+    setActivities([]); // Clear previous activities
     setResult(null);
     setError(null);
     setPhase(null);
@@ -225,6 +235,7 @@ export default function SimulationPage() {
     setRunning(false);
     setTopic('');
     clearMessages();
+    setActivities([]);
     setResult(null);
     setSimulationId(null);
     setError(null);
@@ -304,6 +315,16 @@ export default function SimulationPage() {
                 >
                   📝 Message Log
                 </button>
+                <button
+                  onClick={() => setViewMode('detailed')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                    viewMode === 'detailed'
+                      ? 'bg-blue-500 text-white'
+                      : 'text-gray-700 hover:text-gray-900'
+                  }`}
+                >
+                  🔍 Detailed Activity
+                </button>
               </div>
             </div>
 
@@ -321,6 +342,10 @@ export default function SimulationPage() {
             <div className="relative">
               {viewMode === 'visual' ? (
                 <AgentOrchestrationCanvas messages={messages} phase={phase} />
+              ) : viewMode === 'detailed' ? (
+                <div className="bg-white rounded-lg shadow-lg" style={{ height: '600px' }}>
+                  <ActivityLogger activities={activities} />
+                </div>
               ) : (
                 <div className="bg-white rounded-lg shadow-lg p-6 max-h-96 overflow-y-auto">
                   <AgentDebate messages={messages} />
@@ -367,6 +392,31 @@ export default function SimulationPage() {
               <NewspaperCard newspaper={result.conservative} type="conservative" />
               <NewspaperCard newspaper={result.tech} type="tech" />
             </div>
+
+            {/* Agent Activity Section */}
+            {activities.length > 0 && (
+              <div className="mb-8">
+                <details className="bg-white rounded-lg shadow-lg overflow-hidden">
+                  <summary className="cursor-pointer px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl">🔍</span>
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-800">View Agent Activity</h3>
+                          <p className="text-sm text-gray-600">
+                            See complete conversation flow, tool usage, and thinking process ({activities.length} events captured)
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-gray-400">▼</span>
+                    </div>
+                  </summary>
+                  <div className="p-4" style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                    <ActivityLogger activities={activities} />
+                  </div>
+                </details>
+              </div>
+            )}
 
             <div className="mb-8">
               <ShareButton
