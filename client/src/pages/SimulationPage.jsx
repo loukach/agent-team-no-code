@@ -8,6 +8,7 @@ import AgentStatusBar from '../components/AgentStatusBar';
 import NewspaperCard from '../components/NewspaperCard';
 import ShareButton from '../components/ShareButton';
 import ActivityLogger from '../components/ActivityLogger';
+import CompactActivityFeed from '../components/CompactActivityFeed';
 import { runSimulation } from '../utils/api';
 import { socket, connectSocket, disconnectSocket } from '../utils/socket';
 import { useMessageQueue } from '../hooks/useMessageQueue';
@@ -289,47 +290,8 @@ export default function SimulationPage() {
               Newsrooms are working on: <span className="text-blue-600">{topic}</span>
             </h2>
 
-            {/* Real-Time Agent Status Bar */}
-            <AgentStatusBar agents={agentStates} phase={phase} />
-
-            {/* View Mode Toggle */}
-            <div className="flex justify-center mb-4">
-              <div className="inline-flex rounded-lg border border-gray-300 bg-white p-1">
-                <button
-                  onClick={() => setViewMode('visual')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                    viewMode === 'visual'
-                      ? 'bg-blue-500 text-white'
-                      : 'text-gray-700 hover:text-gray-900'
-                  }`}
-                >
-                  🎨 Visual Orchestration
-                </button>
-                <button
-                  onClick={() => setViewMode('text')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                    viewMode === 'text'
-                      ? 'bg-blue-500 text-white'
-                      : 'text-gray-700 hover:text-gray-900'
-                  }`}
-                >
-                  📝 Message Log
-                </button>
-                <button
-                  onClick={() => setViewMode('detailed')}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                    viewMode === 'detailed'
-                      ? 'bg-blue-500 text-white'
-                      : 'text-gray-700 hover:text-gray-900'
-                  }`}
-                >
-                  🔍 Detailed Activity
-                </button>
-              </div>
-            </div>
-
-            {/* Phase Indicator (only for text view) */}
-            {phase && viewMode === 'text' && (
+            {/* Phase Indicator */}
+            {phase && (
               <div className="mb-4 p-3 bg-gradient-to-r from-indigo-100 to-purple-100 rounded-lg border-2 border-indigo-300">
                 <div className="flex items-center justify-center gap-3">
                   <span className="text-lg font-bold text-indigo-900">{phase.title}</span>
@@ -338,20 +300,79 @@ export default function SimulationPage() {
               </div>
             )}
 
-            {/* Orchestration View */}
-            <div className="relative">
-              {viewMode === 'visual' ? (
-                <AgentOrchestrationCanvas messages={messages} phase={phase} />
-              ) : viewMode === 'detailed' ? (
-                <div className="bg-white rounded-lg shadow-lg" style={{ height: '600px' }}>
-                  <ActivityLogger activities={activities} />
+            {/* Live Agent Activity Cards */}
+            <div className="grid md:grid-cols-3 gap-6">
+              {/* Progressive Tribune */}
+              <div className="bg-white rounded-lg shadow-lg overflow-hidden border-l-4 border-blue-500">
+                <div className="p-4 bg-gradient-to-r from-blue-50 to-blue-100 border-b border-blue-200">
+                  <h3 className="text-lg font-bold text-blue-900">The Progressive Tribune</h3>
+                  <p className="text-xs text-blue-600 italic">"Question Everything"</p>
+                  <div className="mt-2">
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      agentStates.progressive === 'working' ? 'bg-yellow-100 text-yellow-800' :
+                      agentStates.progressive === 'completed' ? 'bg-green-100 text-green-800' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {agentStates.progressive === 'working' ? '⚙️ Working...' :
+                       agentStates.progressive === 'completed' ? '✅ Complete' :
+                       '⏳ Waiting'}
+                    </span>
+                  </div>
                 </div>
-              ) : (
-                <div className="bg-white rounded-lg shadow-lg p-6 max-h-96 overflow-y-auto">
-                  <AgentDebate messages={messages} />
-                  <div ref={messagesEndRef} />
+                <CompactActivityFeed
+                  activities={activities.filter(a => a.agent === 'progressive')}
+                  agentType="progressive"
+                  agentName="The Progressive Tribune"
+                />
+              </div>
+
+              {/* Traditional Post */}
+              <div className="bg-white rounded-lg shadow-lg overflow-hidden border-l-4 border-red-500">
+                <div className="p-4 bg-gradient-to-r from-red-50 to-red-100 border-b border-red-200">
+                  <h3 className="text-lg font-bold text-red-900">The Traditional Post</h3>
+                  <p className="text-xs text-red-600 italic">"Trusted Since 1887"</p>
+                  <div className="mt-2">
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      agentStates.conservative === 'working' ? 'bg-yellow-100 text-yellow-800' :
+                      agentStates.conservative === 'completed' ? 'bg-green-100 text-green-800' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {agentStates.conservative === 'working' ? '⚙️ Working...' :
+                       agentStates.conservative === 'completed' ? '✅ Complete' :
+                       '⏳ Waiting'}
+                    </span>
+                  </div>
                 </div>
-              )}
+                <CompactActivityFeed
+                  activities={activities.filter(a => a.agent === 'conservative')}
+                  agentType="conservative"
+                  agentName="The Traditional Post"
+                />
+              </div>
+
+              {/* Digital Daily */}
+              <div className="bg-white rounded-lg shadow-lg overflow-hidden border-l-4 border-purple-500">
+                <div className="p-4 bg-gradient-to-r from-purple-50 to-purple-100 border-b border-purple-200">
+                  <h3 className="text-lg font-bold text-purple-900">The Digital Daily</h3>
+                  <p className="text-xs text-purple-600 italic">"Tomorrow's News Today"</p>
+                  <div className="mt-2">
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      agentStates.tech === 'working' ? 'bg-yellow-100 text-yellow-800' :
+                      agentStates.tech === 'completed' ? 'bg-green-100 text-green-800' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {agentStates.tech === 'working' ? '⚙️ Working...' :
+                       agentStates.tech === 'completed' ? '✅ Complete' :
+                       '⏳ Waiting'}
+                    </span>
+                  </div>
+                </div>
+                <CompactActivityFeed
+                  activities={activities.filter(a => a.agent === 'tech')}
+                  agentType="tech"
+                  agentName="The Digital Daily"
+                />
+              </div>
             </div>
           </div>
         )}
@@ -388,35 +409,23 @@ export default function SimulationPage() {
             })()}
 
             <div className="grid md:grid-cols-3 gap-6 mb-8">
-              <NewspaperCard newspaper={result.progressive} type="progressive" />
-              <NewspaperCard newspaper={result.conservative} type="conservative" />
-              <NewspaperCard newspaper={result.tech} type="tech" />
+              <NewspaperCard
+                newspaper={result.progressive}
+                type="progressive"
+                activities={activities.filter(a => a.agent === 'progressive')}
+              />
+              <NewspaperCard
+                newspaper={result.conservative}
+                type="conservative"
+                activities={activities.filter(a => a.agent === 'conservative')}
+              />
+              <NewspaperCard
+                newspaper={result.tech}
+                type="tech"
+                activities={activities.filter(a => a.agent === 'tech')}
+              />
             </div>
 
-            {/* Agent Activity Section */}
-            {activities.length > 0 && (
-              <div className="mb-8">
-                <details className="bg-white rounded-lg shadow-lg overflow-hidden">
-                  <summary className="cursor-pointer px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 transition-colors">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="text-2xl">🔍</span>
-                        <div>
-                          <h3 className="text-lg font-bold text-gray-800">View Agent Activity</h3>
-                          <p className="text-sm text-gray-600">
-                            See complete conversation flow, tool usage, and thinking process ({activities.length} events captured)
-                          </p>
-                        </div>
-                      </div>
-                      <span className="text-gray-400">▼</span>
-                    </div>
-                  </summary>
-                  <div className="p-4" style={{ maxHeight: '600px', overflowY: 'auto' }}>
-                    <ActivityLogger activities={activities} />
-                  </div>
-                </details>
-              </div>
-            )}
 
             <div className="mb-8">
               <ShareButton

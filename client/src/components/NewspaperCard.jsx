@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import CompactActivityFeed from './CompactActivityFeed';
 
 const newspaperStyles = {
   progressive: {
@@ -18,7 +19,7 @@ const newspaperStyles = {
   }
 };
 
-export default function NewspaperCard({ newspaper, type }) {
+export default function NewspaperCard({ newspaper, type, activities = [] }) {
   const style = newspaperStyles[type];
 
   if (!newspaper) {
@@ -56,8 +57,8 @@ export default function NewspaperCard({ newspaper, type }) {
             {newspaper.name}
           </h2>
           {isRefused && (
-            <span className="text-xs px-2 py-1 bg-gray-200 text-gray-600 rounded-full">
-              Editorial Guidelines
+            <span className="text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-full">
+              Research Incomplete
             </span>
           )}
           {isError && (
@@ -97,7 +98,7 @@ export default function NewspaperCard({ newspaper, type }) {
 
         {/* Display debate/rebuttal if available */}
         {newspaper.debate && newspaper.debate.rebuttal && !isNonStandard && (
-          <div className="mt-4 pt-3 border-t-2 border-orange-300 bg-orange-50 -mx-4 -mb-4 p-4 rounded-b">
+          <div className="mt-4 pt-3 border-t-2 border-orange-300 bg-orange-50 -mx-4 -mb-4 p-4">
             <div className="flex items-start gap-2">
               <span className="text-2xl">💬</span>
               <div className="flex-1">
@@ -112,6 +113,13 @@ export default function NewspaperCard({ newspaper, type }) {
           </div>
         )}
       </div>
+
+      {/* Compact Activity Feed - Always show at bottom */}
+      <CompactActivityFeed
+        activities={activities}
+        agentType={type}
+        agentName={newspaper?.name || 'Agent'}
+      />
     </motion.div>
   );
 }

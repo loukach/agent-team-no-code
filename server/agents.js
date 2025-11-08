@@ -47,7 +47,27 @@ const NEWSPAPERS = {
 
 function createSystemPrompt(newspaper, topic) {
   // Single-line format for Windows compatibility
-  return `You are the editor of ${newspaper.name}, a newspaper with a distinct editorial voice. Your editorial stance: ${newspaper.personality}. Your writing style: ${newspaper.style}. Your tone: ${newspaper.tone}. RESEARCH PROCESS: 1) Use WebSearch to find recent articles and information about "${topic}" on web sources you identify with 2) Analyze findings through your editorial lens but without changing facts  3) Write from your unique perspective. IMPORTANT: take a bold stance, challenge mainstream narratives and ai-slop, be provocative but professional. Provide ONLY: 1) A compelling headline (max 80 characters), 2) A lead paragraph (2-3 sentences), 3) List of source URLs you used. Format your response as JSON: {"headline": "Your headline here", "story": "Your lead paragraph here", "sources": ["url1", "url2"]}`;
+  return `You are the editor of ${newspaper.name}, a newspaper with a distinct editorial voice. Your editorial stance: ${newspaper.personality}. Your writing style: ${newspaper.style}. Your tone: ${newspaper.tone}.
+
+RESEARCH STRATEGY (you have max 8 search iterations):
+1) Search strategically - quality over quantity
+2) After 3-4 searches, you should have enough to write
+3) Don't get stuck searching endlessly - synthesize what you have
+4) Each search should add new angles, not repeat previous searches
+
+RESEARCH PROCESS:
+1) Use WebSearch to find recent, credible sources about "${topic}"
+2) Analyze findings through your editorial lens without changing facts
+3) Write from your unique perspective
+
+IMPORTANT: Be bold, challenge mainstream narratives, be provocative but professional.
+
+OUTPUT FORMAT: Provide ONLY JSON with:
+1) A compelling headline (max 80 characters)
+2) A lead paragraph (2-3 sentences)
+3) List of source URLs you used
+
+Format: {"headline": "Your headline here", "story": "Your lead paragraph here", "sources": ["url1", "url2"]}`;
 }
 
 async function runDebateAgent(newspaperType, topic, otherAgents, io) {
@@ -67,10 +87,24 @@ async function runDebateAgent(newspaperType, topic, otherAgents, io) {
 
   try {
     // Build the debate prompt showing the other perspectives
+    // Also emit detailed reading_agent events for each perspective
     const otherPerspectives = Object.entries(otherAgents)
       .filter(([_, data]) => data && !data.error && !data.refused)
       .map(([name, data]) => {
         const otherNewspaper = NEWSPAPERS[name];
+
+        // Emit activity showing this agent reading another agent's work
+        io.emit('agent:activity', {
+          agent: newspaperType,
+          newspaper: newspaper.name,
+          type: 'reading_agent',
+          targetAgent: name,
+          targetNewspaper: otherNewspaper.name,
+          headline: data.headline,
+          message: `Reading ${otherNewspaper.name}'s perspective`,
+          timestamp: Date.now()
+        });
+
         return `${otherNewspaper.name}: "${data.headline}"`;
       })
       .join('\n');
@@ -239,7 +273,7 @@ Remember to format your response as JSON with "headline", "story", and "sources"
       options: {
         model: config.anthropic.model, // Use 'sonnet' from config
         apiKey: config.anthropic.apiKey, // Provide API key directly
-        maxTurns: 5, // Allow multiple turns for web research
+        maxTurns: 8, // Allow sufficient turns for thorough web research
         cwd: process.cwd(),
         settingSources: [], // Don't load from filesystem
         allowedTools: ['WebSearch'], // Enable web search capability
@@ -254,6 +288,7 @@ Remember to format your response as JSON with "headline", "story", and "sources"
     let tokenUsage = { input: 0, output: 0 };
     let conversationHistory = []; // Track full conversation
     let seenUserMessages = new Set(); // Deduplicate user messages
+    let searchCount = 0; // Track how many searches were performed
 
     // Collect messages from the agent with real-time progress
     for await (const msg of result) {
@@ -300,8 +335,9 @@ Remember to format your response as JSON with "headline", "story", and "sources"
           console.log(`[AGENT ${newspaperType.toUpperCase()}] Message starting...`);
         }
       } else if (msg.type === 'user') {
-        // User message (our prompt/request) - deduplicate using uuid
-        const messageId = msg.uuid || JSON.stringify(msg.message);
+        // User message (our prompt/request) - deduplicate using uuid + turn + content hash
+        const contentHash = JSON.stringify(msg.message?.content || '').substring(0, 100);
+        const messageId = `${msg.uuid || ''}-turn${turnCount}-${contentHash}`;
         if (!seenUserMessages.has(messageId)) {
           seenUserMessages.add(messageId);
           io.emit('agent:activity', {
@@ -356,6 +392,7 @@ Remember to format your response as JSON with "headline", "story", and "sources"
 
             // Special handling for WebSearch
             if (toolName === 'WebSearch') {
+              searchCount++; // Track searches
               io.emit('agent:activity', {
                 agent: newspaperType,
                 newspaper: newspaper.name,
@@ -451,9 +488,10 @@ Remember to format your response as JSON with "headline", "story", and "sources"
           tokenUsage: tokenUsage,
           duration: Date.now() - startTime,
           totalTurns: turnCount,
+          searchCount: searchCount,
           hitMaxTurns: hitMaxTurns,
           errors: msg.errors,
-          message: hitMaxTurns ? `⚠️ Max turns reached (${turnCount})` : `Completed generation`,
+          message: hitMaxTurns ? `⚠️ Research limit reached (${searchCount} searches, ${turnCount} iterations)` : `Completed generation`,
           timestamp: Date.now()
         });
 
@@ -519,21 +557,27 @@ Remember to format your response as JSON with "headline", "story", and "sources"
       if (jsonMatch) {
         response = JSON.parse(jsonMatch[0]);
       } else {
-        // No JSON found - treat as refusal/explanation
-        console.log(`${newspaper.name} provided non-JSON response (likely refusal):`, finalResult.substring(0, 200));
+        // No JSON found - treat as refusal/explanation or incomplete
+        console.log(`${newspaper.name} provided non-JSON response (likely refusal or incomplete):`, finalResult.substring(0, 200));
         response = {
-          headline: `${newspaper.name} Declined`,
-          story: finalResult.trim(),
-          refused: true
+          headline: `${newspaper.name}: Research Incomplete`,
+          story: `Agent performed ${searchCount} searches across ${turnCount} iterations but couldn't complete the article. Check activity log for research details.`,
+          refused: true,
+          incomplete: true,
+          searchCount: searchCount,
+          turnCount: turnCount
         };
       }
     } catch (parseError) {
       // JSON parsing failed - still show the content
       console.log(`${newspaper.name} JSON parse error, displaying raw response:`, parseError.message);
       response = {
-        headline: `${newspaper.name} Response`,
-        story: finalResult.trim(),
-        refused: true
+        headline: `${newspaper.name}: Research Incomplete`,
+        story: `Agent performed ${searchCount} searches across ${turnCount} iterations but couldn't complete the article. Check activity log for research details.`,
+        refused: true,
+        incomplete: true,
+        searchCount: searchCount,
+        turnCount: turnCount
       };
     }
 

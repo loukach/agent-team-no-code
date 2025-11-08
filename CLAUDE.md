@@ -2,3 +2,4 @@
 - always start by read the implementation status & guideline documents in ./docs
 - keep solutions as simple as possible,
 - avoid mockup data and behaviours.
+- the ultimate goal of this project is to expose how agentts behave - with the world aroudn them (via tools), themselves, and with other agents. Every decision should contribute to achieve this vision.
